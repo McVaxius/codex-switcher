@@ -2,17 +2,21 @@ import type { ImportAccountsSummary } from "../types";
 
 export type FileSource = string | File;
 
-export function isTauriRuntime(): boolean {
-  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+export interface AppUpdateInfo {
+  version: string;
+  body?: string;
+}
+
+export function isDesktopRuntime(): boolean {
+  return typeof window !== "undefined" && Boolean(window.codexSwitcher);
 }
 
 export async function invokeBackend<T>(
   command: string,
   args?: Record<string, unknown>
 ): Promise<T> {
-  if (isTauriRuntime()) {
-    const { invoke } = await import("@tauri-apps/api/core");
-    return invoke<T>(command, args);
+  if (isDesktopRuntime()) {
+    return window.codexSwitcher!.invoke<T>(command, args);
   }
 
   const response = await fetch(`/api/invoke/${command}`, {
@@ -34,9 +38,8 @@ export async function invokeBackend<T>(
 }
 
 export async function openExternalUrl(url: string): Promise<void> {
-  if (isTauriRuntime()) {
-    const { openUrl } = await import("@tauri-apps/plugin-opener");
-    await openUrl(url);
+  if (isDesktopRuntime()) {
+    await window.codexSwitcher!.openExternalUrl(url);
     return;
   }
 
@@ -44,30 +47,16 @@ export async function openExternalUrl(url: string): Promise<void> {
 }
 
 export async function pickAuthJsonFile(): Promise<FileSource | null> {
-  if (isTauriRuntime()) {
-    const { open } = await import("@tauri-apps/plugin-dialog");
-    const selected = await open({
-      multiple: false,
-      filters: [{ name: "JSON", extensions: ["json"] }],
-      title: "Select auth.json file",
-    });
-
-    if (!selected || Array.isArray(selected)) return null;
-    return selected;
+  if (isDesktopRuntime()) {
+    return window.codexSwitcher!.pickAuthJsonFile();
   }
 
   return pickBrowserFile(".json,application/json");
 }
 
 export async function exportFullBackupFile(): Promise<boolean> {
-  if (isTauriRuntime()) {
-    const { save } = await import("@tauri-apps/plugin-dialog");
-    const selected = await save({
-      title: "Export Full Encrypted Account Config",
-      defaultPath: "codex-switcher-full.cswf",
-      filters: [{ name: "Codex Switcher Full Backup", extensions: ["cswf"] }],
-    });
-
+  if (isDesktopRuntime()) {
+    const selected = await window.codexSwitcher!.saveFullBackupFile();
     if (!selected) return false;
     await invokeBackend("export_accounts_full_encrypted_file", { path: selected });
     return true;
@@ -83,15 +72,9 @@ export async function exportFullBackupFile(): Promise<boolean> {
 }
 
 export async function importFullBackupFile(): Promise<ImportAccountsSummary | null> {
-  if (isTauriRuntime()) {
-    const { open } = await import("@tauri-apps/plugin-dialog");
-    const selected = await open({
-      multiple: false,
-      title: "Import Full Encrypted Account Config",
-      filters: [{ name: "Codex Switcher Full Backup", extensions: ["cswf"] }],
-    });
-
-    if (!selected || Array.isArray(selected)) return null;
+  if (isDesktopRuntime()) {
+    const selected = await window.codexSwitcher!.pickFullBackupFile();
+    if (!selected) return null;
     return invokeBackend<ImportAccountsSummary>("import_accounts_full_encrypted_file", {
       path: selected,
     });
@@ -109,6 +92,40 @@ export async function importFullBackupFile(): Promise<ImportAccountsSummary | nu
 export function describeFileSource(source: FileSource | null): string {
   if (!source) return "No file selected";
   return typeof source === "string" ? source : source.name;
+}
+
+export async function minimizeWindow(): Promise<void> {
+  await window.codexSwitcher?.minimizeWindow();
+}
+
+export async function toggleMaximizeWindow(): Promise<void> {
+  await window.codexSwitcher?.toggleMaximizeWindow();
+}
+
+export async function closeWindow(): Promise<void> {
+  await window.codexSwitcher?.closeWindow();
+}
+
+export async function isWindowMaximized(): Promise<boolean> {
+  return window.codexSwitcher?.isWindowMaximized() ?? false;
+}
+
+export function onWindowStateChanged(
+  listener: (state: { isMaximized: boolean }) => void
+): () => void {
+  return window.codexSwitcher?.onWindowStateChanged(listener) ?? (() => {});
+}
+
+export async function checkForUpdate(): Promise<AppUpdateInfo | null> {
+  return window.codexSwitcher?.checkForUpdate() ?? null;
+}
+
+export async function downloadAndInstallUpdate(): Promise<void> {
+  await window.codexSwitcher?.downloadAndInstallUpdate();
+}
+
+export async function relaunchApp(): Promise<void> {
+  await window.codexSwitcher?.relaunch();
 }
 
 async function fileToBase64(file: File): Promise<string> {

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import {
   describeFileSource,
-  isTauriRuntime,
+  isDesktopRuntime,
   openExternalUrl,
   pickAuthJsonFile,
   type FileSource,
@@ -35,7 +35,7 @@ export function AddAccountModal({
   const [authUrl, setAuthUrl] = useState<string>("");
   const [copied, setCopied] = useState<boolean>(false);
   const isPrimaryDisabled = loading || (activeTab === "oauth" && oauthPending);
-  const tauriRuntime = isTauriRuntime();
+  const desktopRuntime = isDesktopRuntime();
 
   const resetForm = () => {
     setName("");
@@ -212,7 +212,7 @@ export function AddAccountModal({
                       Open
                     </button>
                   </div>
-                  {!tauriRuntime && (
+                  {!desktopRuntime && (
                     <p className="text-xs text-amber-600">
                       OAuth login must finish on the same host machine because the callback
                       redirects to `localhost`.

@@ -1,19 +1,22 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useAccounts } from "./hooks/useAccounts";
-import { AccountCard, AddAccountModal, UpdateChecker } from "./components";
+import { AccountDashboardTable, AddAccountModal, UpdateChecker } from "./components";
 import type { CodexProcessInfo } from "./types";
 import {
+  closeWindow,
   exportFullBackupFile,
   importFullBackupFile,
-  isTauriRuntime,
+  isDesktopRuntime,
+  isWindowMaximized as readWindowMaximized,
   invokeBackend,
+  minimizeWindow,
+  onWindowStateChanged,
+  toggleMaximizeWindow,
 } from "./lib/platform";
 import "./App.css";
 
 const THEME_STORAGE_KEY = "codex-switcher-theme";
 type ThemeMode = "light" | "dark";
-const appWindow = getCurrentWindow();
 const isMacOs =
   typeof navigator !== "undefined" &&
   /(Mac|iPhone|iPod|iPad)/i.test(navigator.userAgent);
@@ -65,14 +68,6 @@ function App() {
     isError: boolean;
   } | null>(null);
   const [maskedAccounts, setMaskedAccounts] = useState<Set<string>>(new Set());
-  const [otherAccountsSort, setOtherAccountsSort] = useState<
-    | "deadline_asc"
-    | "deadline_desc"
-    | "remaining_desc"
-    | "remaining_asc"
-    | "subscription_asc"
-    | "subscription_desc"
-  >("deadline_asc");
   const [isActionsMenuOpen, setIsActionsMenuOpen] = useState(false);
   const actionsMenuRef = useRef<HTMLDivElement | null>(null);
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
@@ -85,18 +80,16 @@ function App() {
     }
   });
   const [isWindowMaximized, setIsWindowMaximized] = useState(false);
+  const desktopRuntime = isDesktopRuntime();
 
   const handleTitlebarDrag = useCallback(
-    (event: React.MouseEvent<HTMLDivElement>) => {
-      if (!isTauriRuntime() || event.button !== 0) return;
-      void appWindow.startDragging();
-    },
+    (_event: React.MouseEvent<HTMLDivElement>) => {},
     []
   );
 
   const handleTitlebarDoubleClick = useCallback(() => {
-    if (!isTauriRuntime()) return;
-    void appWindow.toggleMaximize();
+    if (!isDesktopRuntime()) return;
+    void toggleMaximizeWindow();
   }, []);
 
   const toggleMask = (accountId: string) => {
@@ -188,13 +181,11 @@ function App() {
   }, [themeMode]);
 
   useEffect(() => {
-    if (!isTauriRuntime() || isMacOs) return;
-
-    let unlisten: (() => void) | undefined;
+    if (!isDesktopRuntime() || isMacOs) return;
 
     const syncMaximizedState = async () => {
       try {
-        setIsWindowMaximized(await appWindow.isMaximized());
+        setIsWindowMaximized(await readWindowMaximized());
       } catch (err) {
         console.error("Failed to read window state:", err);
       }
@@ -202,20 +193,9 @@ function App() {
 
     void syncMaximizedState();
 
-    appWindow
-      .onResized(() => {
-        void syncMaximizedState();
-      })
-      .then((fn) => {
-        unlisten = fn;
-      })
-      .catch((err) => {
-        console.error("Failed to watch window resize:", err);
-      });
-
-    return () => {
-      unlisten?.();
-    };
+    return onWindowStateChanged((state) => {
+      setIsWindowMaximized(state.isMaximized);
+    });
   }, []);
 
   const handleSwitch = async (accountId: string) => {
@@ -412,108 +392,37 @@ function App() {
     }
   };
 
-  const activeAccount = accounts.find((a) => a.is_active);
-  const otherAccounts = accounts.filter((a) => !a.is_active);
-  const hasRunningProcesses = processInfo && processInfo.count > 0;
+  const hasRunningProcesses = Boolean(processInfo && processInfo.count > 0);
 
-  const sortedOtherAccounts = useMemo(() => {
-    const getResetDeadline = (resetAt: number | null | undefined) =>
-      resetAt ?? Number.POSITIVE_INFINITY;
-
-    const getSubscriptionDeadline = (expiresAt: string | null | undefined) => {
-      if (!expiresAt) return null;
-      const timestamp = new Date(expiresAt).getTime();
-      return Number.isNaN(timestamp) ? null : timestamp;
-    };
-
-    const compareOptionalNumber = (
-      aValue: number | null,
-      bValue: number | null,
-      direction: "asc" | "desc"
-    ) => {
-      if (aValue === null && bValue === null) return 0;
-      if (aValue === null) return 1;
-      if (bValue === null) return -1;
-      return direction === "asc" ? aValue - bValue : bValue - aValue;
-    };
-
-    const getRemainingPercent = (usedPercent: number | null | undefined) => {
-      if (usedPercent === null || usedPercent === undefined) {
-        return Number.NEGATIVE_INFINITY;
-      }
-      return Math.max(0, 100 - usedPercent);
-    };
-
-    return [...otherAccounts].sort((a, b) => {
-      if (
-        otherAccountsSort === "subscription_asc" ||
-        otherAccountsSort === "subscription_desc"
-      ) {
-        const subscriptionDiff = compareOptionalNumber(
-          getSubscriptionDeadline(a.subscription_expires_at),
-          getSubscriptionDeadline(b.subscription_expires_at),
-          otherAccountsSort === "subscription_asc" ? "asc" : "desc"
-        );
-        if (subscriptionDiff !== 0) return subscriptionDiff;
-
-        const deadlineDiff =
-          getResetDeadline(a.usage?.primary_resets_at) -
-          getResetDeadline(b.usage?.primary_resets_at);
-        if (deadlineDiff !== 0) return deadlineDiff;
-
-        const remainingDiff =
-          getRemainingPercent(b.usage?.primary_used_percent) -
-          getRemainingPercent(a.usage?.primary_used_percent);
-        if (remainingDiff !== 0) return remainingDiff;
-
+  const dashboardAccounts = useMemo(
+    () =>
+      [...accounts].sort((a, b) => {
+        if (a.is_active !== b.is_active) return a.is_active ? -1 : 1;
         return a.name.localeCompare(b.name);
-      }
-
-      if (otherAccountsSort === "deadline_asc" || otherAccountsSort === "deadline_desc") {
-        const deadlineDiff =
-          getResetDeadline(a.usage?.primary_resets_at) -
-          getResetDeadline(b.usage?.primary_resets_at);
-        if (deadlineDiff !== 0) {
-          return otherAccountsSort === "deadline_asc" ? deadlineDiff : -deadlineDiff;
-        }
-        const remainingDiff =
-          getRemainingPercent(b.usage?.primary_used_percent) -
-          getRemainingPercent(a.usage?.primary_used_percent);
-        if (remainingDiff !== 0) return remainingDiff;
-        return a.name.localeCompare(b.name);
-      }
-
-      const remainingDiff =
-        getRemainingPercent(b.usage?.primary_used_percent) -
-        getRemainingPercent(a.usage?.primary_used_percent);
-      if (otherAccountsSort === "remaining_desc" && remainingDiff !== 0) {
-        return remainingDiff;
-      }
-      if (otherAccountsSort === "remaining_asc" && remainingDiff !== 0) {
-        return -remainingDiff;
-      }
-      const deadlineDiff =
-        getResetDeadline(a.usage?.primary_resets_at) -
-        getResetDeadline(b.usage?.primary_resets_at);
-      if (deadlineDiff !== 0) return deadlineDiff;
-      return a.name.localeCompare(b.name);
-    });
-  }, [otherAccounts, otherAccountsSort]);
+      }),
+    [accounts]
+  );
 
   return (
     <div className="min-h-screen bg-gray-50 text-gray-900 dark:bg-gray-950 dark:text-gray-100">
       <header className="sticky top-0 z-40 border-b border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900">
-        <div className="flex h-9 items-center bg-white px-3 dark:bg-gray-900">
-          <div
-            onMouseDown={handleTitlebarDrag}
-            onDoubleClick={handleTitlebarDoubleClick}
-            className={`h-full flex-1 select-none cursor-default ${isMacOs ? "ml-18 mr-2" : "mr-3"}`}
-          />
-          {!isMacOs && (
+        {desktopRuntime && (
+          <div className="flex h-9 items-center bg-white px-3 dark:bg-gray-900">
+            <div
+              onMouseDown={handleTitlebarDrag}
+              onDoubleClick={handleTitlebarDoubleClick}
+              className={`h-full flex-1 select-none cursor-default ${isMacOs ? "ml-18 mr-2" : "mr-3"}`}
+              style={
+                { WebkitAppRegion: "drag" } as React.CSSProperties & {
+                  WebkitAppRegion: string;
+                }
+              }
+            />
+            {!isMacOs && (
             <div className="flex items-center gap-1">
               <button
                 onClick={() => {
-                  void appWindow.minimize();
+                  void minimizeWindow();
                 }}
                 className="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
                 title="Minimize"
@@ -524,7 +433,7 @@ function App() {
               </button>
               <button
                 onClick={() => {
-                  void appWindow.toggleMaximize();
+                  void toggleMaximizeWindow();
                 }}
                 className="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
                 title={isWindowMaximized ? "Restore" : "Maximize"}
@@ -542,7 +451,7 @@ function App() {
               </button>
               <button
                 onClick={() => {
-                  void appWindow.close();
+                  void closeWindow();
                 }}
                 className="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-red-500 hover:text-white dark:text-gray-400 dark:hover:bg-red-500 dark:hover:text-white"
                 title="Close"
@@ -552,10 +461,11 @@ function App() {
                 </svg>
               </button>
             </div>
-          )}
-        </div>
+            )}
+          </div>
+        )}
 
-        <div className="max-w-5xl mx-auto px-6 py-4">
+        <div className="mx-auto max-w-6xl px-3 py-3">
           <div className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_max-content] md:items-center md:gap-4">
             <div className="flex items-center gap-3 min-w-0 flex-1">
               <div className="h-10 w-10 rounded-xl bg-black flex items-center justify-center text-white font-bold text-lg">
@@ -641,6 +551,7 @@ function App() {
                 <button
                   onClick={() => setIsActionsMenuOpen((prev) => !prev)}
                   className="h-10 px-4 py-2 text-sm font-medium rounded-lg bg-gray-900 text-white transition-colors hover:bg-gray-800 dark:bg-black dark:hover:bg-neutral-900 shrink-0 whitespace-nowrap"
+                  title="Open account import, export, and add-account actions"
                 >
                   Account ▾
                 </button>
@@ -652,6 +563,7 @@ function App() {
                         setIsAddModalOpen(true);
                       }}
                       className="w-full rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-gray-100 dark:text-white dark:hover:bg-neutral-900"
+                      title="Add an account from OAuth or auth.json"
                     >
                       + Add Account
                     </button>
@@ -662,6 +574,7 @@ function App() {
                       }}
                       disabled={isExportingSlim}
                       className="w-full rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-gray-100 disabled:opacity-50 dark:text-white dark:hover:bg-neutral-900"
+                      title="Export portable slim text for accounts"
                     >
                       {isExportingSlim ? "Exporting..." : "Export Slim Text"}
                     </button>
@@ -672,6 +585,7 @@ function App() {
                       }}
                       disabled={isImportingSlim}
                       className="w-full rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-gray-100 disabled:opacity-50 dark:text-white dark:hover:bg-neutral-900"
+                      title="Import missing accounts from slim text"
                     >
                       {isImportingSlim ? "Importing..." : "Import Slim Text"}
                     </button>
@@ -682,6 +596,7 @@ function App() {
                       }}
                       disabled={isExportingFull}
                       className="w-full rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-gray-100 disabled:opacity-50 dark:text-white dark:hover:bg-neutral-900"
+                      title="Export full encrypted account backup file"
                     >
                       {isExportingFull ? "Exporting..." : "Export Full Encrypted File"}
                     </button>
@@ -692,6 +607,7 @@ function App() {
                       }}
                       disabled={isImportingFull}
                       className="w-full rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-gray-100 disabled:opacity-50 dark:text-white dark:hover:bg-neutral-900"
+                      title="Import missing accounts from a full encrypted backup file"
                     >
                       {isImportingFull ? "Importing..." : "Import Full Encrypted File"}
                     </button>
@@ -704,7 +620,7 @@ function App() {
       </header>
 
       {/* Main Content */}
-      <main className="max-w-5xl mx-auto px-6 py-8">
+      <main className="w-full px-2 py-3 sm:px-3">
         {loading && accounts.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20">
             <div className="animate-spin h-10 w-10 border-2 border-gray-900 dark:border-gray-100 border-t-transparent rounded-full mb-4"></div>
@@ -729,117 +645,37 @@ function App() {
             <button
               onClick={() => setIsAddModalOpen(true)}
               className="px-6 py-3 text-sm font-medium rounded-lg bg-gray-900 hover:bg-gray-800 dark:bg-gray-100 dark:hover:bg-gray-200 text-white dark:text-gray-900 transition-colors"
+              title="Add your first Codex account"
             >
               Add Account
             </button>
           </div>
         ) : (
-          <div className="space-y-8">
-            {/* Active Account */}
-            {activeAccount && (
-              <section>
-                <h2 className="text-sm font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-4">
-                  Active Account
-                </h2>
-                <AccountCard
-                  account={activeAccount}
-                  onSwitch={() => { }}
-                  onWarmup={() =>
-                    handleWarmupAccount(activeAccount.id, activeAccount.name)
-                  }
-                  onDelete={() => handleDelete(activeAccount.id)}
-                  onRefresh={() =>
-                    refreshSingleUsage(activeAccount.id, { refreshMetadata: true })
-                  }
-                  onRename={(newName) => renameAccount(activeAccount.id, newName)}
-                  switching={switchingId === activeAccount.id}
-                  switchDisabled={hasRunningProcesses ?? false}
-                  warmingUp={isWarmingAll || warmingUpId === activeAccount.id}
-                  masked={maskedAccounts.has(activeAccount.id)}
-                  onToggleMask={() => toggleMask(activeAccount.id)}
-                />
-              </section>
-            )}
-
-            {/* Other Accounts */}
-            {otherAccounts.length > 0 && (
-              <section>
-                <div className="flex items-center justify-between gap-3 mb-4">
-                  <h2 className="text-sm font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                    Other Accounts ({otherAccounts.length})
-                  </h2>
-                  <div className="flex items-center gap-2">
-                    <label htmlFor="other-accounts-sort" className="text-xs text-gray-500 dark:text-gray-400">
-                      Sort
-                    </label>
-                    <div className="relative">
-                      <select
-                        id="other-accounts-sort"
-                        value={otherAccountsSort}
-                        onChange={(e) =>
-                          setOtherAccountsSort(
-                            e.target.value as
-                              | "deadline_asc"
-                              | "deadline_desc"
-                              | "remaining_desc"
-                              | "remaining_asc"
-                              | "subscription_asc"
-                              | "subscription_desc"
-                          )
-                        }
-                        className="appearance-none font-sans text-xs sm:text-sm font-medium pl-3 pr-9 py-2 rounded-xl border border-gray-300 dark:border-gray-700 bg-gradient-to-b from-white to-gray-50 dark:from-gray-900 dark:to-gray-800 text-gray-700 dark:text-gray-200 shadow-sm hover:border-gray-400 dark:hover:border-gray-600 hover:shadow focus:outline-none focus:ring-2 focus:ring-gray-300 dark:focus:ring-gray-600 focus:border-gray-400 dark:focus:border-gray-600 transition-all"
-                      >
-                        <option value="deadline_asc">Reset: earliest to latest</option>
-                        <option value="deadline_desc">Reset: latest to earliest</option>
-                        <option value="remaining_desc">
-                          % remaining: highest to lowest
-                        </option>
-                        <option value="remaining_asc">
-                          % remaining: lowest to highest
-                        </option>
-                        <option value="subscription_asc">
-                          Expiry: earliest to latest
-                        </option>
-                        <option value="subscription_desc">
-                          Expiry: latest to earliest
-                        </option>
-                      </select>
-                      <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-gray-500 dark:text-gray-400">
-                        <svg
-                          className="h-4 w-4"
-                          viewBox="0 0 20 20"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                        >
-                          <path d="M6 8l4 4 4-4" strokeLinecap="round" strokeLinejoin="round" />
-                        </svg>
-                      </span>
-                    </div>
-                  </div>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {sortedOtherAccounts.map((account) => (
-                    <AccountCard
-                      key={account.id}
-                      account={account}
-                      onSwitch={() => handleSwitch(account.id)}
-                      onWarmup={() => handleWarmupAccount(account.id, account.name)}
-                      onDelete={() => handleDelete(account.id)}
-                      onRefresh={() =>
-                        refreshSingleUsage(account.id, { refreshMetadata: true })
-                      }
-                      onRename={(newName) => renameAccount(account.id, newName)}
-                      switching={switchingId === account.id}
-                      switchDisabled={hasRunningProcesses ?? false}
-                      warmingUp={isWarmingAll || warmingUpId === account.id}
-                      masked={maskedAccounts.has(account.id)}
-                      onToggleMask={() => toggleMask(account.id)}
-                    />
-                  ))}
-                </div>
-              </section>
-            )}
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+              <h2 className="text-sm font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                Quota Dashboard
+              </h2>
+              <div className="text-xs text-gray-500 dark:text-gray-400">
+                {accounts.length} account{accounts.length === 1 ? "" : "s"}
+              </div>
+            </div>
+            <AccountDashboardTable
+              accounts={dashboardAccounts}
+              onSwitch={handleSwitch}
+              onWarmup={handleWarmupAccount}
+              onDelete={handleDelete}
+              onRefresh={(accountId) =>
+                refreshSingleUsage(accountId, { refreshMetadata: true })
+              }
+              onRename={renameAccount}
+              switchingId={switchingId}
+              switchDisabled={hasRunningProcesses}
+              warmingUpId={warmingUpId}
+              isWarmingAll={isWarmingAll}
+              maskedAccounts={maskedAccounts}
+              onToggleMask={toggleMask}
+            />
           </div>
         )}
       </main>

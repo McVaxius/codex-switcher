@@ -1,12 +1,17 @@
 import { useState, useEffect, useCallback } from "react";
-import type { Update } from "@tauri-apps/plugin-updater";
-import { isTauriRuntime } from "../lib/platform";
+import {
+  checkForUpdate as checkForAppUpdate,
+  downloadAndInstallUpdate,
+  isDesktopRuntime,
+  relaunchApp,
+  type AppUpdateInfo,
+} from "../lib/platform";
 
 type UpdateStatus =
   | { kind: "idle" }
   | { kind: "checking" }
-  | { kind: "available"; update: Update }
-  | { kind: "downloading"; downloaded: number; total: number | null }
+  | { kind: "available"; update: AppUpdateInfo }
+  | { kind: "downloading" }
   | { kind: "ready" }
   | { kind: "error"; message: string };
 
@@ -15,13 +20,12 @@ export function UpdateChecker() {
   const [dismissed, setDismissed] = useState(false);
 
   const checkForUpdate = useCallback(async () => {
-    if (!isTauriRuntime()) return;
+    if (!isDesktopRuntime()) return;
 
     try {
       setStatus({ kind: "checking" });
       setDismissed(false);
-      const { check } = await import("@tauri-apps/plugin-updater");
-      const update = await check();
+      const update = await checkForAppUpdate();
       if (update) {
         setStatus({ kind: "available", update });
       } else {
@@ -34,35 +38,17 @@ export function UpdateChecker() {
   }, []);
 
   useEffect(() => {
-    if (!isTauriRuntime()) return;
+    if (!isDesktopRuntime()) return;
     void checkForUpdate();
   }, [checkForUpdate]);
 
   const handleDownloadAndInstall = async () => {
     if (status.kind !== "available") return;
-    const { update } = status;
 
     try {
-      if (!isTauriRuntime()) return;
-      let downloaded = 0;
-      let total: number | null = null;
-
-      await update.downloadAndInstall((event) => {
-        switch (event.event) {
-          case "Started":
-            total = event.data.contentLength ?? null;
-            setStatus({ kind: "downloading", downloaded: 0, total });
-            break;
-          case "Progress":
-            downloaded += event.data.chunkLength;
-            setStatus({ kind: "downloading", downloaded, total });
-            break;
-          case "Finished":
-            setStatus({ kind: "ready" });
-            break;
-        }
-      });
-
+      if (!isDesktopRuntime()) return;
+      setStatus({ kind: "downloading" });
+      await downloadAndInstallUpdate();
       setStatus({ kind: "ready" });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -73,27 +59,20 @@ export function UpdateChecker() {
 
   const handleRelaunch = async () => {
     try {
-      if (!isTauriRuntime()) return;
-      const { relaunch } = await import("@tauri-apps/plugin-process");
-      await relaunch();
+      if (!isDesktopRuntime()) return;
+      await relaunchApp();
     } catch (err) {
       console.error("Relaunch failed:", err);
     }
   };
 
-  if (!isTauriRuntime()) {
+  if (!isDesktopRuntime()) {
     return null;
   }
 
   if (status.kind === "idle" || status.kind === "checking" || dismissed) {
     return null;
   }
-
-  const formatBytes = (bytes: number) => {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  };
 
   return (
     <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 max-w-md w-full px-4">
@@ -131,20 +110,11 @@ export function UpdateChecker() {
           <div>
             <div className="flex items-center justify-between mb-2">
               <p className="text-sm font-medium text-gray-900 dark:text-gray-100">Downloading update...</p>
-              <p className="text-xs text-gray-500 dark:text-gray-400">
-                {formatBytes(status.downloaded)}
-                {status.total ? ` / ${formatBytes(status.total)}` : ""}
-              </p>
             </div>
             <div className="w-full bg-gray-100 dark:bg-gray-800 rounded-full h-1.5">
               <div
                 className="bg-gray-900 dark:bg-gray-100 h-1.5 rounded-full transition-all duration-300"
-                style={{
-                  width:
-                    status.total && status.total > 0
-                      ? `${Math.min(100, (status.downloaded / status.total) * 100)}%`
-                      : "50%",
-                }}
+                style={{ width: "50%" }}
               />
             </div>
           </div>

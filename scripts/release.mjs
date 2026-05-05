@@ -11,12 +11,7 @@ if (!input) {
   process.exit(1);
 }
 
-const VERSION_FILES = [
-  "package.json",
-  "src-tauri/tauri.conf.json",
-  "src-tauri/Cargo.toml",
-  "src-tauri/Cargo.lock",
-];
+const VERSION_FILES = ["package.json"];
 
 const readFile = (relativePath) =>
   fs.readFileSync(path.join(root, relativePath), "utf8");
@@ -38,24 +33,11 @@ const capture = (command, args) =>
 const parsePackageVersion = (contents) =>
   contents.match(/"version"\s*:\s*"(\d+\.\d+\.\d+)"/)?.[1] ?? null;
 
-const parseCargoVersion = (contents) =>
-  contents.match(/^version\s*=\s*"(\d+\.\d+\.\d+)"/m)?.[1] ?? null;
-
-const parseCargoLockVersion = (contents) =>
-  contents.match(/\[\[package\]\]\nname = "codex-switcher"\nversion = "(\d+\.\d+\.\d+)"/)?.[1] ??
-  null;
-
 const getVersionSnapshot = () => {
   const packageVersion = parsePackageVersion(readFile("package.json"));
-  const tauriVersion = parsePackageVersion(readFile("src-tauri/tauri.conf.json"));
-  const cargoVersion = parseCargoVersion(readFile("src-tauri/Cargo.toml"));
-  const cargoLockVersion = parseCargoLockVersion(readFile("src-tauri/Cargo.lock"));
 
   return {
     "package.json": packageVersion,
-    "src-tauri/tauri.conf.json": tauriVersion,
-    "src-tauri/Cargo.toml": cargoVersion,
-    "src-tauri/Cargo.lock": cargoLockVersion,
   };
 };
 

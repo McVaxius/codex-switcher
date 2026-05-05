@@ -82,36 +82,6 @@ const replaceJsonVersion = (contents) =>
     `"version": "${nextVersion}"`,
   );
 
-const replaceCargoVersion = (contents) =>
-  contents.replace(
-    /^version\s*=\s*"\d+\.\d+\.\d+"/m,
-    `version = "${nextVersion}"`,
-  );
-
-const replaceCargoLockVersion = (contents) => {
-  const blockRegex =
-    /(\[\[package\]\]\nname = "codex-switcher"\nversion = ")\d+\.\d+\.\d+("[\s\S]*?\n\n)/;
-  if (!blockRegex.test(contents)) {
-    console.error(
-      "Could not find codex-switcher package in Cargo.lock",
-    );
-    process.exit(1);
-  }
-  return contents.replace(blockRegex, `$1${nextVersion}$2`);
-};
-
 writeFile("package.json", replaceJsonVersion(packageJson));
-writeFile(
-  "src-tauri/tauri.conf.json",
-  replaceJsonVersion(readFile("src-tauri/tauri.conf.json")),
-);
-writeFile(
-  "src-tauri/Cargo.toml",
-  replaceCargoVersion(readFile("src-tauri/Cargo.toml")),
-);
-writeFile(
-  "src-tauri/Cargo.lock",
-  replaceCargoLockVersion(readFile("src-tauri/Cargo.lock")),
-);
 
 console.log(`Version bumped: ${currentVersion} -> ${nextVersion}`);
