@@ -75,6 +75,55 @@ corepack pnpm dist:win
 
 Then use the new files in `release/`.
 
+### Build Without Committing Binaries
+
+Do not commit generated app files. These paths are build output and are already
+ignored by Git:
+
+```text
+dist/
+dist-electron/
+release/
+```
+
+Local release build:
+
+```bash
+corepack pnpm install
+corepack pnpm test
+corepack pnpm dist:win
+```
+
+This creates the installer and portable app in `release/` on your machine only.
+Commit the source changes, not the generated `.exe`, `.blockmap`, or `latest.yml`
+files.
+
+### Build Installer and Portable App on GitHub
+
+Use GitHub Actions when you want shareable Windows builds without committing
+large files.
+
+Manual release build:
+
+1. Commit and push the source changes.
+2. Open **Actions** in GitHub.
+3. Run **Build & Release**.
+4. Enter the version tag matching `package.json`, such as `v0.2.6`.
+5. Download `Codex Switcher Setup <version>.exe` and
+   `Codex Switcher <version>.exe` from the GitHub Release.
+
+Tag-triggered release build:
+
+```bash
+corepack pnpm release:patch -- --push
+```
+
+Use `release:minor` or `release:major` for larger version bumps. The release
+script requires a clean working tree, bumps `package.json`, commits the version,
+creates a `v<version>` tag, and pushes the branch and tag. The pushed tag starts
+the GitHub Actions build and publishes installer/portable assets on the GitHub
+Release.
+
 ## First Run
 
 1. Open Codex Switcher.
@@ -190,18 +239,18 @@ Use the version bump helper to update the package version before release.
 
 ```bash
 # Exact version
-pnpm version:bump 0.2.1
+corepack pnpm version:bump 0.2.1
 
 # Semver bumps
-pnpm version:patch
-pnpm version:minor
-pnpm version:major
+corepack pnpm version:patch
+corepack pnpm version:minor
+corepack pnpm version:major
 
 # Prepare a release commit and tag
 # This automatically runs the version bump first.
-pnpm release patch
+corepack pnpm release patch
 
 # Prepare and push a release
 # This automatically runs the version bump first.
-pnpm release patch -- --push
+corepack pnpm release patch -- --push
 ```
